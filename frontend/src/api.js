@@ -1,93 +1,60 @@
-/**
- * API client for the LLM Council backend.
- */
-
 const API_BASE = 'http://localhost:8001';
 
+function authHeaders(token) {
+  return {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
 export const api = {
-  /**
-   * List all conversations.
-   */
-  async listConversations() {
-    const response = await fetch(`${API_BASE}/api/conversations`);
-    if (!response.ok) {
-      throw new Error('Failed to list conversations');
-    }
+  async listConversations(token) {
+    const response = await fetch(`${API_BASE}/api/conversations`, {
+      headers: authHeaders(token),
+    });
+    if (!response.ok) throw new Error('Failed to list conversations');
     return response.json();
   },
 
-  /**
-   * Create a new conversation.
-   */
-  async createConversation() {
+  async createConversation(token) {
     const response = await fetch(`${API_BASE}/api/conversations`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: authHeaders(token),
       body: JSON.stringify({}),
     });
-    if (!response.ok) {
-      throw new Error('Failed to create conversation');
-    }
+    if (!response.ok) throw new Error('Failed to create conversation');
     return response.json();
   },
 
-  /**
-   * Get a specific conversation.
-   */
-  async getConversation(conversationId) {
-    const response = await fetch(
-      `${API_BASE}/api/conversations/${conversationId}`
-    );
-    if (!response.ok) {
-      throw new Error('Failed to get conversation');
-    }
+  async getConversation(conversationId, token) {
+    const response = await fetch(`${API_BASE}/api/conversations/${conversationId}`, {
+      headers: authHeaders(token),
+    });
+    if (!response.ok) throw new Error('Failed to get conversation');
     return response.json();
   },
 
-  /**
-   * Send a message in a conversation.
-   */
-  async sendMessage(conversationId, content) {
-    const response = await fetch(
-      `${API_BASE}/api/conversations/${conversationId}/message`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ content }),
-      }
-    );
-    if (!response.ok) {
-      throw new Error('Failed to send message');
-    }
+  async sendMessage(conversationId, content, token) {
+    const response = await fetch(`${API_BASE}/api/conversations/${conversationId}/message`, {
+      method: 'POST',
+      headers: authHeaders(token),
+      body: JSON.stringify({ content }),
+    });
+    if (!response.ok) throw new Error('Failed to send message');
     return response.json();
   },
 
-  /**
-   * Send a message and receive streaming updates.
-   * @param {string} conversationId - The conversation ID
-   * @param {string} content - The message content
-   * @param {function} onEvent - Callback function for each event: (eventType, data) => void
-   * @returns {Promise<void>}
-   */
-  async sendMessageStream(conversationId, content, onEvent) {
+  async sendMessageStream(conversationId, content, token, onEvent) {
     const response = await fetch(
       `${API_BASE}/api/conversations/${conversationId}/message/stream`,
       {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: authHeaders(token),
         body: JSON.stringify({ content }),
       }
     );
 
-    if (!response.ok) {
-      throw new Error('Failed to send message');
-    }
+    if (!response.ok) throw new Error('Failed to send message');
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -111,5 +78,50 @@ export const api = {
         }
       }
     }
+  },
+
+  async listApiKeys(token) {
+    const response = await fetch(`${API_BASE}/api/user/keys`, {
+      headers: authHeaders(token),
+    });
+    if (!response.ok) throw new Error('Failed to list API keys');
+    return response.json();
+  },
+
+  async saveApiKey(token, provider, key) {
+    const response = await fetch(`${API_BASE}/api/user/keys`, {
+      method: 'POST',
+      headers: authHeaders(token),
+      body: JSON.stringify({ provider, key }),
+    });
+    if (!response.ok) throw new Error('Failed to save API key');
+    return response.json();
+  },
+
+  async deleteApiKey(token, provider) {
+    const response = await fetch(`${API_BASE}/api/user/keys/${provider}`, {
+      method: 'DELETE',
+      headers: authHeaders(token),
+    });
+    if (!response.ok) throw new Error('Failed to delete API key');
+    return response.json();
+  },
+
+  async getCouncilConfig(token) {
+    const response = await fetch(`${API_BASE}/api/user/council-config`, {
+      headers: authHeaders(token),
+    });
+    if (!response.ok) throw new Error('Failed to get council config');
+    return response.json();
+  },
+
+  async saveCouncilConfig(token, councilModels, chairmanModel) {
+    const response = await fetch(`${API_BASE}/api/user/council-config`, {
+      method: 'POST',
+      headers: authHeaders(token),
+      body: JSON.stringify({ council_models: councilModels, chairman_model: chairmanModel }),
+    });
+    if (!response.ok) throw new Error('Failed to save council config');
+    return response.json();
   },
 };

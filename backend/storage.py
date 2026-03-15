@@ -1,172 +1,242 @@
-"""JSON-based storage for conversations."""
+"""Supabase-backed storage for conversations and messages."""
 
 import json
-import os
-from datetime import datetime
 from typing import List, Dict, Any, Optional
-from pathlib import Path
-from .config import DATA_DIR
+from . import db
 
 
-def ensure_data_dir():
-    """Ensure the data directory exists."""
-    Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
-
-
-def get_conversation_path(conversation_id: str) -> str:
-    """Get the file path for a conversation."""
-    return os.path.join(DATA_DIR, f"{conversation_id}.json")
-
-
-def create_conversation(conversation_id: str) -> Dict[str, Any]:
-    """
-    Create a new conversation.
-
-    Args:
-        conversation_id: Unique identifier for the conversation
-
-    Returns:
-        New conversation dict
-    """
-    ensure_data_dir()
-
-    conversation = {
-        "id": conversation_id,
-        "created_at": datetime.utcnow().isoformat(),
-        "title": "New Conversation",
-        "messages": []
+async def create_conversation(user_id: str, user_token: str) -> Dict[str, Any]:
+    result = await db.db_insert(
+        "conversations",
+        {"user_id": user_id, "title": "New Conversation"},
+        user_token=user_token,
+    )
+    return {
+        "id": result["id"],
+        "created_at": result["created_at"],
+        "title": result["title"],
+        "messages": [],
     }
 
-    # Save to file
-    path = get_conversation_path(conversation_id)
-    with open(path, 'w') as f:
-        json.dump(conversation, f, indent=2)
 
-    return conversation
-
-
-def get_conversation(conversation_id: str) -> Optional[Dict[str, Any]]:
-    """
-    Load a conversation from storage.
-
-    Args:
-        conversation_id: Unique identifier for the conversation
-
-    Returns:
-        Conversation dict or None if not found
-    """
-    path = get_conversation_path(conversation_id)
-
-    if not os.path.exists(path):
+async def get_conversation(conversation_id: str, user_token: str) -> Optional[Dict[str, Any]]:
+    rows = await db.db_select(
+        "conversations",
+        f"?id=eq.{conversation_id}&select=*",
+        user_token=user_token,
+    )
+    if not rows:
         return None
 
-    with open(path, 'r') as f:
-        return json.load(f)
+    conv = rows[0]
+
+    messages_raw = await db.db_select(
+        "messages",
+        f"?conversation_id=eq.{conversation_id}&order=message_index.asc&select=*",
+        user_token=user_token,
+    )
+
+    messages = []
+    for m in messages_raw:
+        if m["role"] == "user":
+            messages.append({"role": "user", "content": m["content"]})
+        else:
+            messages.append({
+                "role": "assistant",
+                "stage1": m.get("stage1"),
+                "stage2": m.get("stage2"),
+                "stage3": m.get("stage3"),
+            })
+
+    return {
+        "id": conv["id"],
+        "created_at": conv["created_at"],
+        "title": conv["title"],
+        "messages": messages,
+    }
 
 
-def save_conversation(conversation: Dict[str, Any]):
-    """
-    Save a conversation to storage.
+async def list_conversations(user_token: str) -> List[Dict[str, Any]]:
+    rows = await db.db_select(
+        "conversations",
+        "?select=id,created_at,title,updated_at&order=updated_at.desc",
+        user_token=user_token,
+    )
 
-    Args:
-        conversation: Conversation dict to save
-    """
-    ensure_data_dir()
+    result = []
+    for conv in rows:
+        count_rows = await db.db_select(
+            "messages",
+            f"?conversation_id=eq.{conv['id']}&select=id",
+            user_token=user_token,
+        )
+        result.append({
+            "id": conv["id"],
+            "created_at": conv["created_at"],
+            "title": conv["title"],
+            "message_count": len(count_rows),
+        })
 
-    path = get_conversation_path(conversation['id'])
-    with open(path, 'w') as f:
-        json.dump(conversation, f, indent=2)
-
-
-def list_conversations() -> List[Dict[str, Any]]:
-    """
-    List all conversations (metadata only).
-
-    Returns:
-        List of conversation metadata dicts
-    """
-    ensure_data_dir()
-
-    conversations = []
-    for filename in os.listdir(DATA_DIR):
-        if filename.endswith('.json'):
-            path = os.path.join(DATA_DIR, filename)
-            with open(path, 'r') as f:
-                data = json.load(f)
-                # Return metadata only
-                conversations.append({
-                    "id": data["id"],
-                    "created_at": data["created_at"],
-                    "title": data.get("title", "New Conversation"),
-                    "message_count": len(data["messages"])
-                })
-
-    # Sort by creation time, newest first
-    conversations.sort(key=lambda x: x["created_at"], reverse=True)
-
-    return conversations
+    return result
 
 
-def add_user_message(conversation_id: str, content: str):
-    """
-    Add a user message to a conversation.
+async def add_user_message(conversation_id: str, user_id: str, content: str, user_token: str) -> int:
+    count_rows = await db.db_select(
+        "messages",
+        f"?conversation_id=eq.{conversation_id}&select=id",
+        user_token=user_token,
+    )
+    index = len(count_rows)
 
-    Args:
-        conversation_id: Conversation identifier
-        content: User message content
-    """
-    conversation = get_conversation(conversation_id)
-    if conversation is None:
-        raise ValueError(f"Conversation {conversation_id} not found")
+    await db.db_insert(
+        "messages",
+        {
+            "conversation_id": conversation_id,
+            "user_id": user_id,
+            "role": "user",
+            "content": content,
+            "message_index": index,
+        },
+        user_token=user_token,
+    )
 
-    conversation["messages"].append({
-        "role": "user",
-        "content": content
-    })
+    await db.db_update(
+        "conversations",
+        f"?id=eq.{conversation_id}",
+        {"updated_at": "now()"},
+        user_token=user_token,
+    )
 
-    save_conversation(conversation)
+    return index
 
 
-def add_assistant_message(
+async def add_assistant_message(
     conversation_id: str,
+    user_id: str,
     stage1: List[Dict[str, Any]],
     stage2: List[Dict[str, Any]],
-    stage3: Dict[str, Any]
+    stage3: Dict[str, Any],
+    user_token: str,
 ):
-    """
-    Add an assistant message with all 3 stages to a conversation.
+    count_rows = await db.db_select(
+        "messages",
+        f"?conversation_id=eq.{conversation_id}&select=id",
+        user_token=user_token,
+    )
+    index = len(count_rows)
 
-    Args:
-        conversation_id: Conversation identifier
-        stage1: List of individual model responses
-        stage2: List of model rankings
-        stage3: Final synthesized response
-    """
-    conversation = get_conversation(conversation_id)
-    if conversation is None:
-        raise ValueError(f"Conversation {conversation_id} not found")
+    await db.db_insert(
+        "messages",
+        {
+            "conversation_id": conversation_id,
+            "user_id": user_id,
+            "role": "assistant",
+            "stage1": stage1,
+            "stage2": stage2,
+            "stage3": stage3,
+            "message_index": index,
+        },
+        user_token=user_token,
+    )
 
-    conversation["messages"].append({
-        "role": "assistant",
-        "stage1": stage1,
-        "stage2": stage2,
-        "stage3": stage3
-    })
-
-    save_conversation(conversation)
+    await db.db_update(
+        "conversations",
+        f"?id=eq.{conversation_id}",
+        {"updated_at": "now()"},
+        user_token=user_token,
+    )
 
 
-def update_conversation_title(conversation_id: str, title: str):
-    """
-    Update the title of a conversation.
+async def update_conversation_title(conversation_id: str, title: str, user_token: str):
+    await db.db_update(
+        "conversations",
+        f"?id=eq.{conversation_id}",
+        {"title": title},
+        user_token=user_token,
+    )
 
-    Args:
-        conversation_id: Conversation identifier
-        title: New title for the conversation
-    """
-    conversation = get_conversation(conversation_id)
-    if conversation is None:
-        raise ValueError(f"Conversation {conversation_id} not found")
 
-    conversation["title"] = title
-    save_conversation(conversation)
+async def get_user_api_key(user_id: str, provider: str, user_token: str) -> Optional[str]:
+    rows = await db.db_select(
+        "user_api_keys",
+        f"?user_id=eq.{user_id}&provider=eq.{provider}&select=encrypted_key",
+        user_token=user_token,
+    )
+    if not rows:
+        return None
+
+    encrypted = rows[0]["encrypted_key"]
+    try:
+        decrypted = await db.db_rpc(
+            "decrypt_api_key",
+            {"encrypted_value": encrypted, "secret": db.ENCRYPTION_SECRET},
+        )
+        return decrypted
+    except Exception:
+        return None
+
+
+async def save_user_api_key(user_id: str, provider: str, key_value: str, user_token: str):
+    encrypted = await db.db_rpc(
+        "encrypt_api_key",
+        {"key_value": key_value, "secret": db.ENCRYPTION_SECRET},
+    )
+
+    await db.db_upsert(
+        "user_api_keys",
+        {
+            "user_id": user_id,
+            "provider": provider,
+            "encrypted_key": encrypted,
+            "updated_at": "now()",
+        },
+        on_conflict="user_id,provider",
+        user_token=user_token,
+    )
+
+
+async def delete_user_api_key(user_id: str, provider: str, user_token: str):
+    await db.db_delete(
+        "user_api_keys",
+        f"?user_id=eq.{user_id}&provider=eq.{provider}",
+        user_token=user_token,
+    )
+
+
+async def list_user_api_keys(user_id: str, user_token: str) -> List[str]:
+    rows = await db.db_select(
+        "user_api_keys",
+        f"?user_id=eq.{user_id}&select=provider",
+        user_token=user_token,
+    )
+    return [r["provider"] for r in rows]
+
+
+async def get_user_council_config(user_id: str, user_token: str) -> Optional[Dict[str, Any]]:
+    rows = await db.db_select(
+        "user_council_config",
+        f"?user_id=eq.{user_id}&select=*",
+        user_token=user_token,
+    )
+    if not rows:
+        return None
+    return rows[0]
+
+
+async def save_user_council_config(
+    user_id: str,
+    council_models: List[str],
+    chairman_model: str,
+    user_token: str,
+):
+    await db.db_upsert(
+        "user_council_config",
+        {
+            "user_id": user_id,
+            "council_models": council_models,
+            "chairman_model": chairman_model,
+            "updated_at": "now()",
+        },
+        on_conflict="user_id",
+        user_token=user_token,
+    )
