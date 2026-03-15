@@ -13,6 +13,10 @@ async def query_model(
 ) -> Optional[Dict[str, Any]]:
     key = api_key or OPENROUTER_API_KEY
 
+    if not key:
+        print(f"No API key available for model {model}")
+        return None
+
     headers = {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",

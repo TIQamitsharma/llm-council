@@ -68,9 +68,10 @@ async def db_upsert(
     user_token: Optional[str] = None,
 ) -> dict:
     url = f"{SUPABASE_URL}/rest/v1/{table}"
-    headers = get_user_headers(user_token) if user_token else get_service_headers()
     if on_conflict:
-        headers["Prefer"] = f"return=representation,resolution=merge-duplicates"
+        url += f"?on_conflict={on_conflict}"
+    headers = get_user_headers(user_token) if user_token else get_service_headers()
+    headers["Prefer"] = "return=representation,resolution=merge-duplicates"
 
     async with httpx.AsyncClient() as client:
         response = await client.post(url, headers=headers, json=data, timeout=15.0)
@@ -84,14 +85,14 @@ async def db_update(
     query_params: str,
     data: dict,
     user_token: Optional[str] = None,
-) -> list:
+) -> None:
     url = f"{SUPABASE_URL}/rest/v1/{table}{query_params}"
     headers = get_user_headers(user_token) if user_token else get_service_headers()
+    headers["Prefer"] = "return=minimal"
 
     async with httpx.AsyncClient() as client:
         response = await client.patch(url, headers=headers, json=data, timeout=15.0)
         response.raise_for_status()
-        return response.json()
 
 
 async def db_delete(
@@ -113,7 +114,12 @@ async def db_rpc(
     user_token: Optional[str] = None,
 ) -> any:
     url = f"{SUPABASE_URL}/rest/v1/rpc/{function_name}"
-    headers = get_user_headers(user_token) if user_token else get_service_headers()
+    # Always use service role for RPC calls (encryption functions need elevated privileges)
+    headers = get_service_headers()
+    if user_token:
+        # Override with user token only if service role key is not available
+        if not SUPABASE_SERVICE_ROLE_KEY:
+            headers = get_user_headers(user_token)
 
     async with httpx.AsyncClient() as client:
         response = await client.post(url, headers=headers, json=params, timeout=15.0)

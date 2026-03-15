@@ -1,8 +1,12 @@
 """Supabase-backed storage for conversations and messages."""
 
-import json
 from typing import List, Dict, Any, Optional
+from datetime import datetime, timezone
 from . import db
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 async def create_conversation(user_id: str, user_token: str) -> Dict[str, Any]:
@@ -103,7 +107,7 @@ async def add_user_message(conversation_id: str, user_id: str, content: str, use
     await db.db_update(
         "conversations",
         f"?id=eq.{conversation_id}",
-        {"updated_at": "now()"},
+        {"updated_at": _now_iso()},
         user_token=user_token,
     )
 
@@ -142,7 +146,7 @@ async def add_assistant_message(
     await db.db_update(
         "conversations",
         f"?id=eq.{conversation_id}",
-        {"updated_at": "now()"},
+        {"updated_at": _now_iso()},
         user_token=user_token,
     )
 
@@ -188,7 +192,6 @@ async def save_user_api_key(user_id: str, provider: str, key_value: str, user_to
             "user_id": user_id,
             "provider": provider,
             "encrypted_key": encrypted,
-            "updated_at": "now()",
         },
         on_conflict="user_id,provider",
         user_token=user_token,
@@ -235,7 +238,6 @@ async def save_user_council_config(
             "user_id": user_id,
             "council_models": council_models,
             "chairman_model": chairman_model,
-            "updated_at": "now()",
         },
         on_conflict="user_id",
         user_token=user_token,
